@@ -6,6 +6,6 @@ import { processarImagem } from '../controllers/validade.controller.js';
 
 const router = express.Router();
 
-router.post('/validade', receberImagem,processarImagem);
+router.post('/processar', receberImagem,processarImagem);
 
 export default router;

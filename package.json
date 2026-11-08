@@ -9,7 +9,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
-    "test": "node --env-file=.env --import tsx src/scripts/testar-groq.ts src/scripts/teste-val1.png"
+    "test": "node --env-file=.env --import tsx src/scripts/testar-groq.ts src/scripts/teste-val1.png"    
   },
   "keywords": [],
   "author": "",
