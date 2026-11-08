@@ -18,14 +18,26 @@ export async function processarImagem(req: Request, res: Response,): Promise<voi
 
     //3. Enviar imagem para o Groq
     const resultado = await analisarImagemValidade(buffer, mimetype);
+    
 
     //4. Converter a resposta em objeto JSON
-    const dados: unknown = JSON.parse(resultado);
+    let dados: unknown; 
+
+    try {
+      dados =  JSON.parse(resultado.conteudo);
+    } catch (error) {
+      res.status(502).json({
+        sucesso: false,
+        erro: 'O Groq retornou um JSON inválido.',
+      });
+      return
+    }
 
     //5. Retonar o resultado da inferencia
     res.status(200).json({
       sucesso: true,
       dados,
+      metricas: resultado.metricas
     });
 
   } catch (error: unknown) {

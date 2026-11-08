@@ -1,7 +1,9 @@
 import { converterImagemBase64 } from "../utils/imagemBase64.js";
 import { executarInferenciaGroq } from "./groq.inference.js";
 
-export async function analisarImagemValidade(imagem:Buffer, tipoImagem:string):Promise<string>{
+import type { ResultadoInferenciaGroq } from "../types/GroqInferencia.js";
+
+export async function analisarImagemValidade(imagem:Buffer, tipoImagem:string):Promise<ResultadoInferenciaGroq>{
     //1.Preparar imagem
     const imagemUrl = converterImagemBase64(imagem, tipoImagem);
 
