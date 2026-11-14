@@ -2,7 +2,7 @@
 import express from 'express'
 
 import { receberImagem } from '../controllers/multer.controller.js';
-import { processarImagem } from '../controllers/validade.controller.js';
+import { processarImagem } from '../controllers/processar.controller.js';
 
 const router = express.Router();
 

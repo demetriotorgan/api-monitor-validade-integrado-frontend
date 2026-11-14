@@ -4,6 +4,7 @@ import cors from 'cors';
 import connectDB from './config/db.js';
 
 import validadeRoutes from './routers/validade.routes.js'
+import produtoRoutes from './routers/produto.routes.js'
 
 const startServer = async () => {
     await connectDB();
@@ -25,7 +26,7 @@ const startServer = async () => {
         })
     });
 
-    app.use('/api', validadeRoutes);
+    app.use('/api', validadeRoutes, produtoRoutes);
 
     app.listen(PORT, () => {
         console.log(`Servidor rodando na porta ${PORT}`);
