@@ -62,16 +62,10 @@ function formatarValidadeComStatus(validade: IValidade): IValidadeComStatus {
  * Query params opcionais:
  *  - status: 'ATIVA' | 'VENCIDA'
  *  - apenas_alerta: 'true' (filtra só as dentro do período de alerta)
- *  - pagina: number (default 1)
- *  - limite: number (default 20)
  */
 export async function listarValidadesComStatus(req: Request, res: Response): Promise<void> {
   try {
-    const { status, apenas_alerta, pagina = '1', limite = '20' } = req.query;
-
-    const page = Math.max(1, parseInt(pagina as string, 10) || 1);
-    const limit = Math.max(1, Math.min(100, parseInt(limite as string, 10) || 20));
-    const skip = (page - 1) * limit;
+    const { status, apenas_alerta } = req.query;
 
     const filtro: Record<string, unknown> = {};
 
@@ -85,10 +79,10 @@ export async function listarValidadesComStatus(req: Request, res: Response): Pro
       }
     }
 
-    const [registros, total] = await Promise.all([
-      ValidadeModel.find(filtro).sort({ 'data.data_iso': 1 }).skip(skip).limit(limit).lean(),
-      ValidadeModel.countDocuments(filtro),
-    ]);
+    const registros = await ValidadeModel
+      .find(filtro)
+      .sort({ _id: -1 })
+      .lean();
 
     let resultado = registros.map((registro) =>
       formatarValidadeComStatus(registro as unknown as IValidade)
@@ -101,12 +95,6 @@ export async function listarValidadesComStatus(req: Request, res: Response): Pro
     res.status(200).json({
       sucesso: true,
       dados: resultado,
-      paginacao: {
-        pagina: page,
-        limite: limit,
-        total,
-        totalPaginas: Math.ceil(total / limit),
-      },
     });
   } catch (erro) {
     console.error('Erro ao listar validades com status:', erro);
