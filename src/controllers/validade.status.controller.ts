@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { startOfDay, subDays, isBefore, isAfter, isEqual, parseISO, format } from 'date-fns';
+import { startOfDay, subDays, isBefore, isAfter, isEqual, parseISO, format, differenceInCalendarDays } from 'date-fns';
 import { fromZonedTime, toZonedTime } from 'date-fns-tz';
 import { ValidadeModel } from '../models/Validade.js';
 import { IValidade } from '../types/validade.types.js';
@@ -79,14 +79,23 @@ export async function listarValidadesComStatus(req: Request, res: Response): Pro
       }
     }
 
+    const hoje = obterHojeBrasilia();
+
     const registros = await ValidadeModel
       .find(filtro)
       .sort({ _id: -1 })
       .lean();
 
-    let resultado = registros.map((registro) =>
-      formatarValidadeComStatus(registro as unknown as IValidade)
-    );
+    let resultado = registros.map((registro) => {
+      const validadeFormatada = formatarValidadeComStatus(registro as unknown as IValidade);
+      const diasRestantes =
+        validadeFormatada.status === 'ATIVA' ?
+          differenceInCalendarDays(parseISO(registro.data.data_iso as string), hoje) : null;
+      return {
+        ...validadeFormatada,
+        dias_restantes: diasRestantes
+      }
+    });
 
     if (apenas_alerta === 'true') {
       resultado = resultado.filter((item) => item.dentro_do_periodo_alerta);
