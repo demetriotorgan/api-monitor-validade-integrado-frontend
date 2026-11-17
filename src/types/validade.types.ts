@@ -46,13 +46,31 @@ export interface IValidade {
   data: IDataValidade;
   produto: IDadosProduto;
   ml: IDadosML;
-  alerta: IAlertaConfig;  // obrigatório
+  alerta: IAlertaConfig;
+  validade: StatusValidade;
   criadoEm?: Date | string;
   atualizadoEm?: Date | string;
+
 }
 
 export interface IValidadeCreationPayload
-  extends Omit<IValidade, '_id' | 'criadoEm' | 'atualizadoEm'> {}
+  extends Omit<IValidade, '_id' | 'criadoEm' | 'atualizadoEm'> { }
 
 export interface IValidadeUpdatePayload
-  extends Partial<Omit<IValidade, '_id' | 'criadoEm' | 'atualizadoEm'>> {}
+  extends Partial<Omit<IValidade, '_id' | 'criadoEm' | 'atualizadoEm'>> { }
+
+export type StatusValidade = 'espera' | 'alerta' | 'vencido' | 'encerrado';
+
+export interface AlterarValidadeBody {
+  data?: IDataValidade;
+  produto?: IDadosProduto;
+  ml?: IDadosML;
+  alerta?: Partial<IAlertaConfig>;
+  validade?: 'encerrado';
+}
+
+export interface IValidadeComStatus extends IValidade {
+  status: StatusValidade;
+  dentro_do_periodo_alerta: boolean;
+}
+

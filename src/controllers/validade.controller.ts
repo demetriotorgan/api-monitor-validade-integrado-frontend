@@ -1,7 +1,9 @@
 import { Request, Response } from 'express';
 import { ValidadeModel } from '../models/Validade.js';
-import { IValidadeCreationPayload, IValidadeUpdatePayload } from '../types/validade.types.js';
+import { IValidadeCreationPayload, IValidadeUpdatePayload, StatusValidade } from '../types/validade.types.js';
 import { isValidObjectId } from 'mongoose';
+import { differenceInCalendarDays, isBefore, isEqual, parseISO, startOfDay } from 'date-fns';
+import { calcularStatusValidade } from '../utils/validade.utils.js';
 
 interface CriarValidadeBody extends IValidadeCreationPayload { }
 interface AlterarValidadeBody extends IValidadeUpdatePayload {}
@@ -42,11 +44,14 @@ export async function salvarValidade(req: Request, res: Response): Promise<void>
       return;
     }
 
+    const statusValidade = calcularStatusValidade(data.data_iso, alerta.dias_antecedencia);
+
     const novaValidade = new ValidadeModel({
       data,
       produto,
       ml: ml ?? {},
-      alerta
+      alerta,
+      validade: statusValidade
     });
 
     const validadeSalva = await novaValidade.save();
@@ -68,7 +73,7 @@ export async function salvarValidade(req: Request, res: Response): Promise<void>
 export async function alterarValidade(req: Request, res: Response): Promise<void> {
   try {
     const { id } = req.params;
-    const { data, produto, ml, alerta }: AlterarValidadeBody = req.body;
+    const { data, produto, ml, alerta, validade }: AlterarValidadeBody = req.body;
 
     if (!isValidObjectId(id)) {
       res.status(400).json({
@@ -78,7 +83,27 @@ export async function alterarValidade(req: Request, res: Response): Promise<void
       return;
     }
 
+    const validadeAtual = await ValidadeModel.findById(id).lean();
+
+    if (!validadeAtual) {
+      res.status(404).json({
+        sucesso: false,
+        erro: 'Validade não encontrada.',
+      });
+      return;
+    }
+
+    if (validadeAtual.validade === 'encerrado') {
+      res.status(400).json({
+        sucesso: false,
+        erro: 'Validade encerrada não pode ser alterada.',
+      });
+      return;
+    }
+
     const atualizacao: Record<string, unknown> = {};
+    let deveRecalcularStatus = false;
+    let novoStatus: StatusValidade | undefined;
 
     if (data !== undefined) {
       const camposObrigatorios = ['ano', 'mes', 'dia', 'data_iso', 'data_original'] as const;
@@ -95,6 +120,7 @@ export async function alterarValidade(req: Request, res: Response): Promise<void
       }
 
       atualizacao.data = data;
+      deveRecalcularStatus = true;
     }
 
     if (produto !== undefined) {
@@ -130,6 +156,50 @@ export async function alterarValidade(req: Request, res: Response): Promise<void
       }
 
       atualizacao.alerta = alerta;
+      deveRecalcularStatus = true;
+    }
+
+    if (validade !== undefined) {
+      const houveOutraAlteracao =
+        data !== undefined || produto !== undefined || ml !== undefined || alerta !== undefined;
+
+      if (houveOutraAlteracao) {
+        res.status(400).json({
+          sucesso: false,
+          erro: 'Ao encerrar uma validade, não envie outros campos para atualização.',
+        });
+        return;
+      }
+
+      if (validade !== 'encerrado') {
+        res.status(400).json({
+          sucesso: false,
+          erro: 'Apenas a transição para "encerrado" é permitida manualmente.',
+        });
+        return;
+      }
+
+      if (!['espera', 'alerta'].includes(validadeAtual.validade)) {
+        res.status(400).json({
+          sucesso: false,
+          erro: `Não é possível encerrar uma validade com status "${validadeAtual.validade}".`,
+        });
+        return;
+      }
+
+      novoStatus = 'encerrado';
+    }
+
+    if (deveRecalcularStatus && novoStatus !== 'encerrado') {
+      const dataReferencia = data ?? validadeAtual.data;
+      const diasAntecedencia =
+        alerta?.dias_antecedencia ?? validadeAtual.alerta.dias_antecedencia;
+
+      novoStatus = calcularStatusValidade(dataReferencia.data_iso, diasAntecedencia);
+    }
+
+    if (novoStatus !== undefined) {
+      atualizacao.validade = novoStatus;
     }
 
     if (Object.keys(atualizacao).length === 0) {
@@ -175,7 +245,7 @@ export async function alterarValidade(req: Request, res: Response): Promise<void
       erro: 'Erro interno ao alterar validade.',
     });
   }
-};
+}
 
 export async function listarValidadePorId(req: Request, res: Response): Promise<void> {
   try {

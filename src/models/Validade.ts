@@ -51,6 +51,12 @@ const ValidadeSchema = new Schema<IValidade>(
     produto: { type: DadosProdutoSchema, required: true },
     ml: { type: DadosMLSchema, default: {} },
     alerta: { type: AlertaConfigSchema, required: true },
+    validade:{
+      type:String,
+      enum:['espera', 'alerta', 'vencido', 'encerrado'],
+      default:'espera',
+      required:true
+    }
   },
   {
     timestamps: { createdAt: 'criadoEm', updatedAt: 'atualizadoEm' },

@@ -9,12 +9,14 @@ import { confirmarEnvioAlerta, limparTodasValidades, listarAlertasPendentes, lis
 const router = express.Router();
 
 router.post('/processar', receberImagem,processarImagem);
+
+//-----validade.controller
 router.post('/salvarValidade', salvarValidade);
 router.patch('/alterarValidade/:id', alterarValidade);
 router.get('/validade/:id', listarValidadePorId);
 router.delete('/deletarValidade/:id', deletarValidade);
 
-
+//-----status.controller
 router.get('/com-status', listarValidadesComStatus);
 router.get('/alertas-pendentes', listarAlertasPendentes);
 router.patch('/:id/confirmar-envio', confirmarEnvioAlerta);
