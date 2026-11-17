@@ -16,7 +16,7 @@ export interface IDataValidade {
  */
 export interface IDadosProduto {
   _id_produto: Types.ObjectId | string;
-  codigo_barras: string;
+  codigoBarras: string;
   nome: string;
 }
 

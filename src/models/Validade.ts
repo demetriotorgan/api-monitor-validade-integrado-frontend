@@ -37,7 +37,7 @@ const DadosProdutoSchema = new Schema<IDadosProduto>(
         message: '_id_produto deve ser string ou ObjectId',
       },
     },
-    codigo_barras: { type: String, required: true },
+    codigoBarras: { type: String, required: true },
     nome: { type: String, required: true },
   },
   { _id: false }
@@ -61,7 +61,7 @@ const ValidadeSchema = new Schema<IValidade>(
 
 // Índices úteis para leituras futuras
 ValidadeSchema.index({ 'produto._id_produto': 1 });
-ValidadeSchema.index({ 'produto.codigo_barras': 1 });
+ValidadeSchema.index({ 'produto.codigoBarras': 1 });
 ValidadeSchema.index({ 'data.data_iso': 1 });
 
 export const ValidadeModel = model<IValidade>('Validade', ValidadeSchema);

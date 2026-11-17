@@ -28,7 +28,7 @@ export async function salvarValidade(req: Request, res: Response): Promise<void>
     }
 
     const camposData = ['ano', 'mes', 'dia', 'data_iso', 'data_original'] as const;
-    const camposProduto = ['_id_produto', 'codigo_barras', 'nome'] as const;
+    const camposProduto = ['_id_produto', 'codigoBarras', 'nome'] as const;
     
 
     const dataIncompleta = camposData.some((campo) => data[campo] === undefined || data[campo] === null);
@@ -98,7 +98,7 @@ export async function alterarValidade(req: Request, res: Response): Promise<void
     }
 
     if (produto !== undefined) {
-      const camposObrigatorios = ['_id_produto', 'codigo_barras', 'nome'] as const;
+      const camposObrigatorios = ['_id_produto', 'codigoBarras', 'nome'] as const;
       const produtoIncompleto = camposObrigatorios.some(
         (campo) => produto[campo] === undefined || produto[campo] === null
       );
@@ -106,7 +106,7 @@ export async function alterarValidade(req: Request, res: Response): Promise<void
       if (produtoIncompleto) {
         res.status(400).json({
           sucesso: false,
-          erro: 'Ao atualizar o produto, todos os campos (_id_produto, codigo_barras, nome) são obrigatórios.',
+          erro: 'Ao atualizar o produto, todos os campos (_id_produto, codigoBarras, nome) são obrigatórios.',
         });
         return;
       }

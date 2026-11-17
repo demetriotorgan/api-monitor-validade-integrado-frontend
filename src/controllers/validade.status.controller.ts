@@ -189,3 +189,21 @@ export async function confirmarEnvioAlerta(req: Request, res: Response): Promise
     });
   }
 }
+
+export async function limparTodasValidades(req: Request, res: Response): Promise<void> {
+  try {
+    const resultado = await ValidadeModel.deleteMany({});
+
+    res.status(200).json({
+      sucesso: true,
+      mensagem: 'Todos os registros de validade foram removidos.',
+      removidos: resultado.deletedCount ?? 0,
+    });
+  } catch (erro) {
+    console.error('Erro ao limpar registros de validade:', erro);
+    res.status(500).json({
+      sucesso: false,
+      mensagem: 'Erro interno ao limpar registros de validade.',
+    });
+  }
+}
