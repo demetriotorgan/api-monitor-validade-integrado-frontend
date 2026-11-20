@@ -25,3 +25,13 @@ export interface AtualizarProdutoDTO {
   codigoBarras?: string;
   nome?: string;
 }
+
+export interface CriarProdutoBody {
+    codigoBarras: string;
+    nome: string;
+}
+
+export interface AlterarProdutoBody {
+    codigoBarras?: string;
+    nome?: string;
+}

@@ -1,9 +1,10 @@
-import { Request, Response } from 'express';
+import { NextFunction, Request, Response } from 'express';
 import { ValidadeModel } from '../models/Validade.js';
 import { IValidadeCreationPayload, IValidadeUpdatePayload, StatusValidade } from '../types/validade.types.js';
 import { isValidObjectId } from 'mongoose';
 import { differenceInCalendarDays, isBefore, isEqual, parseISO, startOfDay } from 'date-fns';
 import { calcularStatusValidade } from '../utils/validade.utils.js';
+import { ErroEdicao } from '../erros/app-error.js';
 
 interface CriarValidadeBody extends IValidadeCreationPayload { }
 interface AlterarValidadeBody extends IValidadeUpdatePayload {}
@@ -282,38 +283,40 @@ export async function listarValidadePorId(req: Request, res: Response): Promise<
   }
 };
 
-export async function deletarValidade(req: Request, res: Response): Promise<void> {
+export async function deletarValidade(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const { id } = req.params;
+    const idParam = req.params.id;
+    const id = Array.isArray(idParam) ? idParam[0] : idParam;
 
-    if (!isValidObjectId(id)) {
-      res.status(400).json({
-        sucesso: false,
-        erro: 'ID da validade inválido',
-      });
-      return;
+    if (!id || !isValidObjectId(id)) {
+      throw new ErroEdicao('ID da validade inválido', 400);
     }
 
+    // 1. Busca primeiro para checar o status - não pode deletar direto
+    const validade = await ValidadeModel.findById(id).lean();
+
+    if (!validade) {
+      throw new ErroEdicao('Validade não encontrada', 404);
+    }
+
+    // 2. TRAVA DE AUDITORIA - RF Histórico
+    // vencido / encerrado = congelado, nunca deleta
+    if (validade.validade === 'vencido' || validade.validade === 'encerrado') {
+      throw new ErroEdicao(
+        'Não é possível excluir validade vencida ou encerrada. Registro mantido para histórico e auditoria.',
+        409
+      );
+    }
+
+    // 3. Só chega aqui se for 'espera' ou 'alerta' - aí pode deletar
     const validadeDeletada = await ValidadeModel.findByIdAndDelete(id).lean();
-
-    if (!validadeDeletada) {
-      res.status(404).json({
-        sucesso: false,
-        erro: 'Validade não encontrada',
-      });
-      return;
-    }
 
     res.status(200).json({
       sucesso: true,
       mensagem: 'Validade deletada com sucesso',
       dados: validadeDeletada,
     });
-  } catch (erro) {
-    console.error('Erro ao deletar validade:', erro);
-    res.status(500).json({
-      sucesso: false,
-      erro: 'Erro interno ao deletar validade',
-    });
+  } catch (error) {
+    next(error);
   }
-};
+}

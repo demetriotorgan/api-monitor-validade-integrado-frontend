@@ -5,6 +5,7 @@ import connectDB from './config/db.js';
 
 import validadeRoutes from './routers/validade.routes.js'
 import produtoRoutes from './routers/produto.routes.js'
+import { errorMiddleware } from './middlewares/error.middleware.js';
 
 const startServer = async () => {
     await connectDB();
@@ -27,6 +28,9 @@ const startServer = async () => {
     });
 
     app.use('/api', validadeRoutes, produtoRoutes);
+    
+    // Middleware de erro
+    app.use(errorMiddleware);
 
     app.listen(PORT, () => {
         console.log(`Servidor rodando na porta ${PORT}`);
