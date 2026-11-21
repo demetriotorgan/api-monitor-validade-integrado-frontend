@@ -10,38 +10,65 @@ import { toZonedTime } from 'date-fns-tz';
 
 const TIMEZONE_BRASIL = 'America/Sao_Paulo';
 
-export function calcularStatusValidade(dataIso: string, diasAntecedencia: number): StatusValidade {
-  const hojeStr = new Date().toLocaleDateString('en-CA', { timeZone: TIMEZONE_BRASIL });
-  const hoje = startOfDay(parseISO(hojeStr));
-  const dataValidade = startOfDay(parseISO(dataIso));
-
-  if (isBefore(dataValidade, hoje) || isEqual(dataValidade, hoje)) {
-    return 'vencido';
-  }
-
-  const diasRestantes = differenceInCalendarDays(dataValidade, hoje);
-
-  if (diasRestantes <= diasAntecedencia) {
-    return 'alerta';
-  }
-
-  return 'espera';
-}
-
+// ÚNICA fonte de "hoje" - todo mundo usa essa
 export function obterHojeBrasilia(): Date {
   const agoraUtc = new Date();
   const hojeBrasilia = toZonedTime(agoraUtc, TIMEZONE_BRASIL);
   return startOfDay(hojeBrasilia);
 }
 
-function calcularStatus(validade: IValidade): StatusValidade {
+// RF-14: Usado só no controller, para dar a mensagem certa
+// Retorna true se data > hoje
+export function isDataValidadeFutura(dataIso: string): boolean {
   const hoje = obterHojeBrasilia();
-  const dataValidade = startOfDay(parseISO(validade.data.data_iso));
+  const dataValidade = startOfDay(parseISO(dataIso));
+  return isAfter(dataValidade, hoje);
+}
 
-  if (isBefore(dataValidade, hoje)) {
+// RF-13 / RF-14: Só calcula, não lança erro
+export function calcularStatusValidade(dataIso: string, diasAntecedencia: number): StatusValidade {
+  const hoje = obterHojeBrasilia();
+  const dataValidade = startOfDay(parseISO(dataIso));
+
+  // Data <= hoje = vencido (hoje já conta como vencido para monitoramento)
+  if (isBefore(dataValidade, hoje) || isEqual(dataValidade, hoje)) {
     return 'vencido';
   }
+
+  const diasRestantes = differenceInCalendarDays(dataValidade, hoje);
+
+  // RF-13: data - alerta <= hoje = alerta
+  if (diasRestantes <= diasAntecedencia) {
+    return 'alerta';
+  }
+
   return 'espera';
+};
+
+// RF-19: data_inicio_alerta = data_validade - dias_alerta
+export function calcularDataInicioAlerta(dataIso: string, diasAntecedencia: number): string {
+  const dataValidade = startOfDay(parseISO(dataIso));
+  const inicioAlerta = subDays(dataValidade, diasAntecedencia);
+  // Retorna no mesmo formato YYYY-MM-DD do data_iso
+  return inicioAlerta.toISOString().slice(0, 10);
+}
+
+export function formatarValidadeComStatus(validade: IValidade): IValidadeComStatus {
+  // Se já está encerrado, não recalcula - é histórico congelado
+  const statusCalculado = validade.validade === 'encerrado'
+    ? 'encerrado'
+    : calcularStatusValidade(validade.data.data_iso, validade.alerta.dias_antecedencia);
+
+  return {
+    ...validade,
+    status: statusCalculado,
+    dentro_do_periodo_alerta: calcularDentroDoPeriodoAlerta(validade),
+     // RF-19: expõe para o front e para o relatório
+    data_inicio_alerta: calcularDataInicioAlerta(
+      validade.data.data_iso,
+      validade.alerta.dias_antecedencia
+    ),
+  };
 }
 
 function calcularDentroDoPeriodoAlerta(validade: IValidade): boolean {
@@ -51,23 +78,17 @@ function calcularDentroDoPeriodoAlerta(validade: IValidade): boolean {
 
   if (diasAntecedencia <= 0) return false;
 
+  // Se já venceu, não está mais "em alerta", está vencido
+  if (isBefore(dataValidade, hoje) || isEqual(dataValidade, hoje)) {
+    return false;
+  }
+
   const inicioAlerta = subDays(dataValidade, diasAntecedencia);
 
-  // Dentro do período: inicioAlerta <= hoje <= dataValidade
+  // Dentro do período: inicioAlerta <= hoje < dataValidade
   const depoisOuIgualInicio =
     isAfter(hoje, inicioAlerta) || isEqual(hoje, inicioAlerta);
-  const antesOuIgualValidade =
-    isBefore(hoje, dataValidade) || isEqual(hoje, dataValidade);
+  const antesDaValidade = isBefore(hoje, dataValidade);
 
-  return depoisOuIgualInicio && antesOuIgualValidade;
-}
-
-export function formatarValidadeComStatus(validade: IValidade): IValidadeComStatus {
-  return {
-    // espalha todas as propriedades que já estão no objeto plain
-    ...validade,
-    // adiciona os campos calculados
-    status: calcularStatus(validade),
-    dentro_do_periodo_alerta: calcularDentroDoPeriodoAlerta(validade),
-  };
+  return depoisOuIgualInicio && antesDaValidade;
 }

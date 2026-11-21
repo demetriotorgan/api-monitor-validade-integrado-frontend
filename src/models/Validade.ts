@@ -6,7 +6,11 @@ const AlertaConfigSchema = new Schema<IAlertaConfig>(
     dias_antecedencia: {
       type: Number,
       required: true,
-      min: 1
+      min: 1,
+      validate: {
+        validator: (v: number) => Number.isInteger(v),
+        message: 'dias_antecedencia deve ser um número inteiro maior que zero.',
+      },
     },
     ultimo_envio_em: {
       type: Date
@@ -51,11 +55,11 @@ const ValidadeSchema = new Schema<IValidade>(
     produto: { type: DadosProdutoSchema, required: true },
     ml: { type: DadosMLSchema, default: {} },
     alerta: { type: AlertaConfigSchema, required: true },
-    validade:{
-      type:String,
-      enum:['espera', 'alerta', 'vencido', 'encerrado'],
-      default:'espera',
-      required:true
+    validade: {
+      type: String,
+      enum: ['espera', 'alerta', 'vencido', 'encerrado'],
+      default: 'espera',
+      required: true
     }
   },
   {
@@ -69,5 +73,15 @@ const ValidadeSchema = new Schema<IValidade>(
 ValidadeSchema.index({ 'produto._id_produto': 1 });
 ValidadeSchema.index({ 'produto.codigoBarras': 1 });
 ValidadeSchema.index({ 'data.data_iso': 1 });
+ValidadeSchema.index(
+  { 'produto._id_produto': 1, 'data.data_iso': 1, validade: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      validade: { $in: ['espera', 'alerta', 'vencido'] }
+    },
+    name: 'uniq_validade_ativa_por_produto_data'
+  }
+);
 
 export const ValidadeModel = model<IValidade>('Validade', ValidadeSchema);
