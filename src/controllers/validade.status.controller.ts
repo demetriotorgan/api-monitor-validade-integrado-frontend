@@ -56,17 +56,16 @@ export async function listarValidadesComStatus(req: Request, res: Response): Pro
   try {
     const { status, apenas_alerta } = req.query;
 
-    const filtro: Record<string, unknown> = {};
+    // RF-21: Valida o parâmetro, mas NÃO filtra no banco por status calculado
+    let statusFiltro: StatusValidade | 'ativa' | 'vencida' | undefined;
 
     if (status !== undefined) {
       const statusStr = String(status).toLowerCase();
 
-      if (statusStr === 'ativa') {
-        filtro.validade = { $in: ['espera', 'alerta'] };
-      } else if (statusStr === 'vencida') {
-        filtro.validade = 'vencido';
+      if (statusStr === 'ativa' || statusStr === 'vencida') {
+        statusFiltro = statusStr;
       } else if (STATUS_VALIDOS.includes(statusStr as StatusValidade)) {
-        filtro.validade = statusStr;
+        statusFiltro = statusStr as StatusValidade;
       } else {
         res.status(400).json({
           sucesso: false,
@@ -77,28 +76,45 @@ export async function listarValidadesComStatus(req: Request, res: Response): Pro
     }
 
     if (apenas_alerta === 'true') {
-      filtro.validade = 'alerta';
+      statusFiltro = 'alerta';
     }
 
-    const hoje = obterHojeBrasilia();
+    // RF-21: Só ENCERRADO é armazenado, então só ele pode filtrar no Mongo.
+    // ESPERA / ALERTA / VENCIDO são calculados, então busca tudo e filtra depois.
+    // Otimização: se o filtro for só 'encerrado', filtra no banco mesmo.
+    const filtroBanco: Record<string, unknown> = {};
+    if (statusFiltro === 'encerrado') {
+      filtroBanco.validade = 'encerrado';
+    }
 
     const registros = await ValidadeModel
-      .find(filtro)
+      .find(filtroBanco)
       .sort({ _id: -1 })
       .lean();
 
-    const resultado = registros.map((registro) => {
-      const validadeDoc = registro as unknown as IValidade;
+    const hoje = obterHojeBrasilia();
 
-      const diasRestantes =
-        validadeDoc.validade === 'espera' || validadeDoc.validade === 'alerta'
-          ? differenceInCalendarDays(parseISO(validadeDoc.data.data_iso), hoje)
-          : null;
+    // RF-21 + RF-19: Calcula o status na hora para cada registro
+    const formatados = registros.map((registro) => {
+      const validadeDoc = registro as unknown as IValidade;
+      const formatada = formatarValidadeComStatus(validadeDoc);
+
+      const diasRestantes = formatada.validade === 'encerrado'
+        ? null
+        : differenceInCalendarDays(parseISO(validadeDoc.data.data_iso), hoje);
 
       return {
-        ...validadeDoc,
+        ...formatada,
         dias_restantes: diasRestantes,
       };
+    });
+
+    // RF-21: Filtra pelo status CALCULADO, não pelo salvo
+    const resultado = formatados.filter((item) => {
+      if (!statusFiltro) return true;
+      if (statusFiltro === 'ativa') return item.validade === 'espera' || item.validade === 'alerta';
+      if (statusFiltro === 'vencida') return item.validade === 'vencido';
+      return item.validade === statusFiltro;
     });
 
     res.status(200).json({

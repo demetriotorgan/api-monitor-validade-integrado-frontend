@@ -69,8 +69,7 @@ export interface AlterarValidadeBody {
   validade?: 'encerrado';
 }
 
-export interface IValidadeComStatus extends IValidade {
-  status: StatusValidade;
+export interface IValidadeComStatus extends IValidade {  
   dentro_do_periodo_alerta: boolean;
   data_inicio_alerta: string; // RF-19: YYYY-MM-DD
 }

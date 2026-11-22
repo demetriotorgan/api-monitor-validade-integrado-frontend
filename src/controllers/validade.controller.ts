@@ -3,8 +3,14 @@ import { ValidadeModel } from '../models/Validade.js';
 import { IValidade, IValidadeCreationPayload, IValidadeUpdatePayload, StatusValidade } from '../types/validade.types.js';
 import { isValidObjectId } from 'mongoose';
 import { calcularStatusValidade, formatarValidadeComStatus, isDataValidadeFutura } from '../utils/validade.utils.js';
-import { ErroEdicao } from '../erros/app-error.js';
+import { AppError, ErroEdicao } from '../erros/app-error.js';
 import { ProdutoModel } from '../models/Produto.js';
+import { podeCriar } from '../validade-lifecycle/orquestrador/camada1-criacao.js';
+import { decisaoParaErro } from '../validade-lifecycle/adaptador/mapa-erro.js';
+import { podeEncerrar } from '../validade-lifecycle/orquestrador/camada2-encerramento.js';
+import { podeCorrigir } from '../validade-lifecycle/orquestrador/camada2-correcao.js';
+import { podeDeletar } from '../validade-lifecycle/orquestrador/camada2-deletar.js';
+
 
 interface AlterarValidadeBody extends IValidadeUpdatePayload { }
 
@@ -13,12 +19,12 @@ export async function salvarValidade(req: Request, res: Response, next: NextFunc
   try {
     const { data, produto, alerta } = req.body;
 
-    // 1. Campos obrigatórios - RF-11
+    // 1. Campos obrigatórios - RF-11 - MANTÉM
     if (!data?.data_iso || !produto?._id_produto) {
       throw new ErroEdicao('Os campos "data.data_iso" e "produto._id_produto" são obrigatórios.', 400);
     }
 
-    // RF-15: Tem que ser inteiro > 0
+    // RF-15: Tem que ser inteiro > 0 - MANTÉM (regra mais restrita que a Camada 1)
     if (
       !alerta ||
       typeof alerta.dias_antecedencia !== 'number' ||
@@ -29,67 +35,67 @@ export async function salvarValidade(req: Request, res: Response, next: NextFunc
         'O período de alerta deve ser um número inteiro maior que zero. Ex: 1, 3, 7.',
         400
       );
-    }    
+    }
 
-    // 2. Valida se o _id é ObjectId válido
+    // 2. Valida se o _id é ObjectId válido - MANTÉM
     const idProduto = String(produto._id_produto);
     if (!isValidObjectId(idProduto)) {
       throw new ErroEdicao('ID do produto inválido.', 400);
     }
 
-    // 3. RF-12: Busca o produto REAL no banco - não confia no front
+    // 3. RF-12: Busca o produto REAL no banco - MANTÉM
     const produtoReal = await ProdutoModel.findById(idProduto).lean();
     if (!produtoReal) {
       throw new ErroEdicao('Produto não encontrado.', 404);
     }
 
-    // 4. Valida data real - 31/02 não pode passar
+    // 4. Valida data real - 31/02 não pode passar - MANTÉM
     const camposData = ['ano', 'mes', 'dia', 'data_iso', 'data_original'] as const;
     const dataIncompleta = camposData.some((c) => data[c] === undefined || data[c] === null);
     if (dataIncompleta) {
       throw new ErroEdicao('Todos os campos de "data" devem ser preenchidos.', 400);
     }
 
-    // RF-14
-    if (!isDataValidadeFutura(data.data_iso)) {
-      throw new ErroEdicao('A data de validade deve ser uma data futura. Não é possível criar registro com data no passado ou igual a hoje.', 400);
-    }
-
-    // RF-13: Só pode nascer em ESPERA
-    // data_validade - dias_alerta > hoje
-    const statusValidade = calcularStatusValidade(data.data_iso, alerta.dias_antecedencia);
-
-    if (statusValidade !== 'espera') {
-      throw new ErroEdicao(
-        `Não é possível criar registro que já nasceria em ${statusValidade.toUpperCase()}. ` +
-        `A data de validade menos o período de alerta já passou. ` +
-        `Ajuste a data de validade ou reduza os dias de alerta.`,
-        400
-      );
-    }
-
-    // RF-16: Impedir duas validades iguais para o mesmo produto
-    // Só bloqueia se o antigo ainda estiver ativo (espera / alerta / vencido)
-    // Se o antigo está ENCERRADO, pode criar de novo
+    // RF-16: Impedir duas validades iguais - MANTÉM, mas sobe para antes da Camada 1
+    // Porque a Camada 1 precisa saber se já existe duplicata
     const duplicata = await ValidadeModel.findOne({
       'produto._id_produto': produtoReal._id,
       'data.data_iso': data.data_iso,
       validade: { $in: ['espera', 'alerta', 'vencido'] },
     }).lean();
 
-    if (duplicata) {
-      throw new ErroEdicao(
-        `Já existe um registro ativo para este produto com a mesma data de validade (${data.data_iso}). Encerre o registro antigo antes de criar um novo.`,
-        409
-      );
+    // [CAMADA 1] - ÚNICA MUDANÇA REAL
+    // A partir daqui, a decisão de criar vem da Camada 1, não de ifs soltos.
+    // Ela substitui isDataValidadeFutura + calcularStatus + check de duplicata.
+    // Se ela negar, a gente lança o mesmo ErroEdicao de antes, com mesma mensagem.
+    const decisao = podeCriar(
+      {
+        data_iso: data.data_iso,
+        dias_antecedencia: alerta.dias_antecedencia,
+        produto: produtoReal.nome || String(produtoReal._id),
+      },
+      !!duplicata
+    );
+
+    if (!decisao.autorizado) {
+      // MODO SOMBRA: descomente a linha abaixo para só logar na primeira semana
+      // console.warn('[CAMADA1-SOMBRA] Divergência:', decisao.codigo, decisao.motivo);
+      // E comente o throw abaixo durante a sombra
+
+      // MODO REAL: lança o erro
+      throw decisaoParaErro(decisao.codigo, decisao.motivo);
     }
 
-    // 6. Monta o snapshot a partir do BANCO, não do front
+    // A partir daqui, decisao.proximoStatus é 'espera' ou 'alerta'
+    // Nunca é 'vencido', nunca é 'encerrado'
+    const statusValidade = decisao.proximoStatus;
+
+    // 6. Monta o snapshot a partir do BANCO, não do front - MANTÉM
     const novaValidade = await ValidadeModel.create({
       data,
       produto: {
         _id_produto: produtoReal._id,
-        codigoBarras: produtoReal.codigoBarras, // já normalizado pelo RF-04
+        codigoBarras: produtoReal.codigoBarras,
         nome: produtoReal.nome,
       },
       ml: {},
@@ -99,9 +105,7 @@ export async function salvarValidade(req: Request, res: Response, next: NextFunc
       validade: statusValidade,
     });
 
-
-    // RF-19: Formata a resposta para expor os campos calculados
-    // O create retorna um Document do Mongoose, precisa converter para objeto plain
+    // RF-19: Formata a resposta - MANTÉM
     const validadeFormatada = formatarValidadeComStatus(
       novaValidade.toObject() as IValidade
     );
@@ -116,299 +120,205 @@ export async function salvarValidade(req: Request, res: Response, next: NextFunc
   }
 };
 
-export async function alterarValidade(req: Request, res: Response): Promise<void> {
+// src/controllers/validade.encerramento.controller.ts
+// Controller de encerramento - rota dedicada
+// Só chama a Camada 2. Não decide regra nenhuma aqui.
+// Só o humano encerra. Cron NUNCA chama essa rota.
+
+export async function encerrarValidade(req: any, res: any, next: any) {
   try {
     const { id } = req.params;
-    const { data, produto, ml, alerta, validade }: AlterarValidadeBody = req.body;
 
-    if (!isValidObjectId(id)) {
-      res.status(400).json({ sucesso: false, erro: 'ID da validade inválido' });
-      return;
+    // 1. Busca o registro - se não existe, 404
+    const registro = await ValidadeModel.findById(id);
+    if (!registro) {
+      const erro: any = new Error('Registro de validade não encontrado.');
+      erro.statusCode = 404;
+      erro.codigo = 'NAO_ENCONTRADO';
+      return next(erro);
     }
 
-    const validadeAtual = await ValidadeModel.findById(id).lean();
-
-    if (!validadeAtual) {
-      res.status(404).json({ sucesso: false, erro: 'Validade não encontrada.' });
-      return;
-    }
-
-    // --- RF-20: Produto não pode ser trocado ---
-    // A edição não quebra o vínculo com o produto
-    if (produto !== undefined) {
-      res.status(400).json({
-        sucesso: false,
-        erro: 'O produto vinculado não pode ser alterado. Crie um novo registro para outro produto.',
-      });
-      return;
-    }
-
-    if (ml !== undefined) {
-      res.status(400).json({
-        sucesso: false,
-        erro: 'O campo "ml" não pode ser alterado manualmente.',
-      });
-      return;
-    }
-
-    // --- Encerramento: fluxo separado, sem outros campos ---
-    const querEncerrar = validade !== undefined;
-    const temOutroCampo = data !== undefined || alerta !== undefined;
-
-    if (querEncerrar && temOutroCampo) {
-      res.status(400).json({
-        sucesso: false,
-        erro: 'Ao encerrar uma validade, não envie outros campos para atualização.',
-      });
-      return;
-    }
-
-    if (querEncerrar) {
-      if (validade !== 'encerrado') {
-        res.status(400).json({
-          sucesso: false,
-          erro: 'Apenas a transição para "encerrado" é permitida manualmente.',
-        });
-        return;
-      }
-
-      // Só pode encerrar quem está em espera/alerta (status calculado)
-      const statusParaEncerrar = calcularStatusValidade(
-        validadeAtual.data.data_iso,
-        validadeAtual.alerta.dias_antecedencia
-      );
-
-      if (statusParaEncerrar !== 'espera' && statusParaEncerrar !== 'alerta') {
-        res.status(400).json({
-          sucesso: false,
-          erro: `Não é possível encerrar uma validade com status "${statusParaEncerrar}".`,
-        });
-        return;
-      }
-
-      const encerrada = await ValidadeModel.findByIdAndUpdate(
-        id,
-        { $set: { validade: 'encerrado' } },
-        { new: true, runValidators: true }
-      ).lean();
-
-      res.status(200).json({
-        sucesso: true,
-        mensagem: 'Validade encerrada com sucesso.',
-        dados: formatarValidadeComStatus(encerrada as unknown as IValidade),
-      });
-      return;
-    }
-
-    // --- RF-20A: Só pode editar registro ativo ---
-    // Usa status CALCULADO, não o salvo no banco (que fica congelado em 'espera')
-    const statusAtual = validadeAtual.validade === 'encerrado'
-      ? 'encerrado'
-      : calcularStatusValidade(
-          validadeAtual.data.data_iso,
-          validadeAtual.alerta.dias_antecedencia
-        );
-
-    if (statusAtual === 'encerrado' || statusAtual === 'vencido') {
-      res.status(400).json({
-        sucesso: false,
-        erro: `Registro ${statusAtual.toUpperCase()} não pode ser editado. Crie um novo registro.`,
-      });
-      return;
-    }
-
-    // --- Validação dos campos novos ---
-    let dataFinal = validadeAtual.data;
-    let diasFinal = validadeAtual.alerta.dias_antecedencia;
-
-    if (data !== undefined) {
-      const camposObrigatorios = ['ano', 'mes', 'dia', 'data_iso', 'data_original'] as const;
-      const dataIncompleta = camposObrigatorios.some(
-        (campo) => data[campo] === undefined || data[campo] === null
-      );
-
-      if (dataIncompleta) {
-        res.status(400).json({
-          sucesso: false,
-          erro: 'Ao atualizar a data, todos os campos (ano, mes, dia, data_iso, data_original) são obrigatórios.',
-        });
-        return;
-      }
-
-      dataFinal = data;
-    }
-
-    if (alerta !== undefined) {
-      if (alerta.dias_antecedencia !== undefined) {
-        // RF-20C + RF-15: tem que ser inteiro > 0
-        if (
-          typeof alerta.dias_antecedencia !== 'number' ||
-          !Number.isInteger(alerta.dias_antecedencia) ||
-          alerta.dias_antecedencia <= 0
-        ) {
-          res.status(400).json({
-            sucesso: false,
-            erro: 'O período de alerta deve ser um número inteiro maior que zero. Ex: 1, 3, 7.',
-          });
-          return;
-        }
-        diasFinal = alerta.dias_antecedencia;
-      }
-    }
-
-    if (data === undefined && alerta === undefined) {
-      res.status(400).json({
-        sucesso: false,
-        erro: 'Nenhum campo válido foi enviado para atualização. Envie "data" ou "alerta".',
-      });
-      return;
-    }
-
-    // --- RF-20B + RF-20C: Não pode ficar VENCIDO ---
-    // data > hoje E data - alerta >= hoje
-    // Aceita ESPERA e ALERTA, rejeita só VENCIDO (diferente do RF-13 que só aceita ESPERA)
-    if (!isDataValidadeFutura(dataFinal.data_iso)) {
-      res.status(400).json({
-        sucesso: false,
-        erro: 'A nova data de validade deve ser uma data futura. Não é possível alterar para data no passado ou igual a hoje.',
-      });
-      return;
-    }
-
-    const novoStatus = calcularStatusValidade(dataFinal.data_iso, diasFinal);
-
-    if (novoStatus === 'vencido') {
-      res.status(400).json({
-        sucesso: false,
-        erro: 'Não é possível alterar para uma situação de VENCIDO. A data de validade menos o período de alerta já passou. Ajuste a data ou reduza os dias de alerta.',
-      });
-      return;
-    }
-
-    // --- RF-20D: Não pode duplicar ---
-    // Usa os valores FINAIS (mesclados), não só o que veio no body
-    // Exclui ele mesmo com _id: { $ne: id }
-    const duplicata = await ValidadeModel.findOne({
-      _id: { $ne: id },
-      'produto._id_produto': validadeAtual.produto._id_produto,
-      'data.data_iso': dataFinal.data_iso,
-      validade: { $in: ['espera', 'alerta', 'vencido'] },
-    }).lean();
-
-    if (duplicata) {
-      res.status(409).json({
-        sucesso: false,
-        erro: `Já existe um registro para esse produto com essa data (${dataFinal.data_iso}).`,
-      });
-      return;
-    }
-
-    // --- RF-20: Atualiza no mesmo _id, sem tocar no produto ---
-    const atualizacao: Record<string, unknown> = {
-      validade: novoStatus, // salva o status novo calculado (espera ou alerta)
+    // 2. Monta o atual a partir do BANCO, nunca do front
+    // Front não manda status, não manda data, não manda nada
+    // Só o id vem da URL
+    const atual = {
+      data_iso: registro.data.data_iso,
+      dias_antecedencia: registro.alerta.dias_antecedencia,
     };
-    if (data !== undefined) atualizacao.data = data;
-    if (alerta !== undefined) atualizacao.alerta = { dias_antecedencia: diasFinal };
 
-    const validadeAtualizada = await ValidadeModel.findByIdAndUpdate(
-      id,
-      { $set: atualizacao },
-      { new: true, runValidators: true }
-    ).lean();
+    // 3. Camada 2 decide - fonte única de verdade
+    const decisao = podeEncerrar(registro.validade, atual);
 
-    if (!validadeAtualizada) {
-      res.status(404).json({ sucesso: false, erro: 'Validade não encontrada.' });
-      return;
+    if (!decisao.autorizado) {
+      const erro: any = new Error(decisao.motivo);
+      // Terminal já resolvido = conflito, não erro de validação
+      erro.statusCode = decisao.codigo === 'JA_ENCERRADO' || decisao.codigo === 'JA_VENCIDO'
+        ? 409
+        : 400;
+      erro.codigo = decisao.codigo;
+      return next(erro);
     }
 
-    // RF-19: Formata para já vir com data_inicio_alerta recalculado
-    res.status(200).json({
+    // 4. Aplica a transição decidida pela Camada 2
+    registro.validade = decisao.proximoStatus!; // 'encerrado'
+    const registroSalvo = await registro.save();
+
+    // 5. Responde com o registro formatado
+    // formatarValidade congela 'encerrado', não recalcula para espera/alerta
+    return res.status(200).json({
       sucesso: true,
-      mensagem: 'Validade atualizada com sucesso.',
-      dados: formatarValidadeComStatus(validadeAtualizada as unknown as IValidade),
+      mensagem: 'Registro encerrado com sucesso. Produto salvo antes de vencer.',
+      dados: formatarValidadeComStatus(registroSalvo.toObject() as any),
     });
-  } catch (erro) {
-    console.error('Erro ao alterar validade:', erro);
+  } catch (err) {
+    return next(err);
+  }
+};
 
-    if (erro instanceof Error && 'code' in erro && erro.code === 11000) {
-      res.status(409).json({
-        sucesso: false,
-        erro: 'Já existe um registro para esse produto com essa data.',
-      });
-      return;
+export async function corrigirValidade(req: any, res: any, next: any) {
+  try {
+    const { id } = req.params;
+
+    // 1. Busca o registro - se não existe, 404
+    const registro = await ValidadeModel.findById(id);
+    if (!registro) {
+      const erro: any = new Error('Registro de validade não encontrado.');
+      erro.statusCode = 404;
+      erro.codigo = 'NAO_ENCONTRADO';
+      return next(erro);
     }
 
-    res.status(500).json({
-      sucesso: false,
-      erro: 'Erro interno ao alterar validade.',
-    });
-  }
-}
+    // 2. Monta o atual a partir do BANCO, nunca do front
+    const atual = {
+      data_iso: registro.data.data_iso,
+      dias_antecedencia: registro.alerta.dias_antecedencia,
+    };
 
-export async function listarValidadePorId(req: Request, res: Response): Promise<void> {
+    // 3. Monta a correção a partir do FRONT, só os 2 campos editáveis
+    // Qualquer outro campo que o front mandar (validade, produto, etc) é ignorado
+    const correcao: any = {};
+    if (req.body?.data?.data_iso !== undefined) {
+      correcao.data_iso = req.body.data.data_iso;
+    }
+    if (req.body?.alerta?.dias_antecedencia !== undefined) {
+      correcao.dias_antecedencia = req.body.alerta.dias_antecedencia;
+    }
+
+    // 4. Camada 2 decide
+    const decisao = podeCorrigir(registro.validade, atual, correcao);
+
+    if (!decisao.autorizado) {
+      const erro: any = new Error(decisao.motivo);
+      erro.statusCode =
+        decisao.codigo === 'JA_ENCERRADO' || decisao.codigo === 'JA_VENCIDO'
+          ? 409
+          : 400;
+      erro.codigo = decisao.codigo;
+      return next(erro);
+    }
+
+    // 5. Aplica só o que veio na correção
+    if (correcao.data_iso !== undefined) {
+      // Atualiza data_iso + ano/mes/dia juntos, para não ficar inconsistente
+      // Ex: "2027-02-10" -> ano 2027, mes 2, dia 10
+      const [ano, mes, dia] = correcao.data_iso.split('-').map(Number);
+      registro.data.data_iso = correcao.data_iso;
+      registro.data.ano = ano;
+      registro.data.mes = mes;
+      registro.data.dia = dia;      
+    }
+    if (correcao.dias_antecedencia !== undefined) {
+      registro.alerta.dias_antecedencia = correcao.dias_antecedencia;
+    }
+
+    // 6. Aplica o próximo status decidido pela Camada 2
+    registro.validade = decisao.proximoStatus!; // 'espera' ou 'alerta'
+
+    const registroSalvo = await registro.save();
+
+    return res.status(200).json({
+      sucesso: true,
+      mensagem: 'Registro corrigido com sucesso.',
+      dados: formatarValidadeComStatus(registroSalvo.toObject() as any),
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+export async function listarValidadePorId(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
   try {
     const { id } = req.params;
 
     if (!isValidObjectId(id)) {
-      res.status(400).json({
-        sucesso: false,
-        erro: 'ID da validade inválido',
-      });
-      return;
+      throw new AppError('ID da validade inválido.', 400, 'ID_INVALIDO');
     }
 
     const validade = await ValidadeModel.findById(id).lean();
 
     if (!validade) {
-      res.status(404).json({
-        sucesso: false,
-        erro: 'Validade não encontrada',
-      });
-      return;
+      throw new AppError('Validade não encontrada.', 404, 'NAO_ENCONTRADO');
     }
 
-    // RF-19: Formata para expor status, dentro_do_periodo_alerta e data_inicio_alerta
-    const validadeFormatada = formatarValidadeComStatus(validade as unknown as IValidade);
+    // Camada 1: recalcula, não salva
+    // Depois da correção do formatar, só encerrado congela
+    const validadeFormatada = formatarValidadeComStatus(
+      validade as unknown as IValidade
+    );
 
     res.status(200).json({
       sucesso: true,
       dados: validadeFormatada,
     });
   } catch (erro) {
-    console.error('Erro ao buscar validade por ID:', erro);
-    res.status(500).json({
-      sucesso: false,
-      erro: 'Erro interno ao buscar validade',
-    });
+    next(erro);
   }
 };
 
-export async function deletarValidade(req: Request, res: Response, next: NextFunction): Promise<void> {
+export async function deletarValidade(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
   try {
     const idParam = req.params.id;
     const id = Array.isArray(idParam) ? idParam[0] : idParam;
 
     if (!id || !isValidObjectId(id)) {
-      throw new ErroEdicao('ID da validade inválido', 400);
+      throw new AppError('ID da validade inválido.', 400, 'ID_INVALIDO');
     }
 
     // 1. Busca primeiro para checar o status - não pode deletar direto
     const validade = await ValidadeModel.findById(id).lean();
 
     if (!validade) {
-      throw new ErroEdicao('Validade não encontrada', 404);
+      throw new AppError('Validade não encontrada.', 404, 'NAO_ENCONTRADO');
     }
 
-    // 2. TRAVA DE AUDITORIA - RF Histórico
-    // vencido / encerrado = congelado, nunca deleta
-    if (validade.validade === 'vencido' || validade.validade === 'encerrado') {
-      throw new ErroEdicao(
-        'Não é possível excluir validade vencida ou encerrada. Registro mantido para histórico e auditoria.',
-        409
+    // 2. Monta o atual a partir do BANCO, nunca do front
+    const atual = {
+      data_iso: validade.data.data_iso,
+      dias_antecedencia: validade.alerta.dias_antecedencia,
+    };
+
+    // 3. Camada 2 decide - controller não decide nada
+    const decisao = podeDeletar(validade.validade, atual);
+
+    if (!decisao.autorizado) {
+      throw new AppError(
+        decisao.motivo ?? 'Exclusão não permitida.',
+        decisao.codigo === 'JA_ENCERRADO' || decisao.codigo === 'JA_VENCIDO'
+          ? 409
+          : 400,
+        decisao.codigo ?? 'TRANSICAO_PROIBIDA'
       );
     }
 
-    // 3. Só chega aqui se for 'espera' ou 'alerta' - aí pode deletar
+    // 4. Só chega aqui se for espera ou alerta real
     const validadeDeletada = await ValidadeModel.findByIdAndDelete(id).lean();
 
     res.status(200).json({

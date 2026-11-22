@@ -2,6 +2,7 @@
 import { parseISO, startOfDay, isBefore, isEqual, differenceInCalendarDays, subDays, isAfter } from 'date-fns';
 import { IValidade, IValidadeComStatus, StatusValidade } from '../types/validade.types.js';
 import { toZonedTime } from 'date-fns-tz';
+import { format } from 'date-fns';
 
 /**
  * Calcula o status inicial de uma validade com base na data de vencimento
@@ -49,29 +50,14 @@ export function calcularStatusValidade(dataIso: string, diasAntecedencia: number
 export function calcularDataInicioAlerta(dataIso: string, diasAntecedencia: number): string {
   const dataValidade = startOfDay(parseISO(dataIso));
   const inicioAlerta = subDays(dataValidade, diasAntecedencia);
-  // Retorna no mesmo formato YYYY-MM-DD do data_iso
-  return inicioAlerta.toISOString().slice(0, 10);
-}
-
-export function formatarValidadeComStatus(validade: IValidade): IValidadeComStatus {
-  // Se já está encerrado, não recalcula - é histórico congelado
-  const statusCalculado = validade.validade === 'encerrado'
-    ? 'encerrado'
-    : calcularStatusValidade(validade.data.data_iso, validade.alerta.dias_antecedencia);
-
-  return {
-    ...validade,
-    status: statusCalculado,
-    dentro_do_periodo_alerta: calcularDentroDoPeriodoAlerta(validade),
-     // RF-19: expõe para o front e para o relatório
-    data_inicio_alerta: calcularDataInicioAlerta(
-      validade.data.data_iso,
-      validade.alerta.dias_antecedencia
-    ),
-  };
+  // RF-19: Retorna no mesmo formato YYYY-MM-DD do data_iso, sem converter para UTC
+  return format(inicioAlerta, 'yyyy-MM-dd');
 }
 
 function calcularDentroDoPeriodoAlerta(validade: IValidade): boolean {
+  // RF-21: Encerrado é histórico congelado, nunca está em alerta
+  if (validade.validade === 'encerrado') return false;
+
   const hoje = obterHojeBrasilia();
   const dataValidade = startOfDay(parseISO(validade.data.data_iso));
   const diasAntecedencia = validade.alerta?.dias_antecedencia ?? 0;
@@ -91,4 +77,24 @@ function calcularDentroDoPeriodoAlerta(validade: IValidade): boolean {
   const antesDaValidade = isBefore(hoje, dataValidade);
 
   return depoisOuIgualInicio && antesDaValidade;
+}
+
+export function formatarValidadeComStatus(validade: IValidade): IValidadeComStatus {
+  // VENCIDO e ENCERRADO são histórico congelado, não recalcula
+  const ehHistoricoCongelado = 
+    validade.validade === 'encerrado' || validade.validade === 'vencido';
+
+  const validadeCalculada = ehHistoricoCongelado
+    ? validade.validade
+    : calcularStatusValidade(validade.data.data_iso, validade.alerta.dias_antecedencia);
+
+  return {
+    ...validade,
+    validade: validadeCalculada,
+    dentro_do_periodo_alerta: calcularDentroDoPeriodoAlerta(validade),
+    data_inicio_alerta: calcularDataInicioAlerta(
+      validade.data.data_iso,
+      validade.alerta.dias_antecedencia
+    ),
+  };
 }
