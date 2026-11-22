@@ -1,10 +1,12 @@
-import { Request, Response } from 'express';
+import { NextFunction, Request, Response } from 'express';
 import { startOfDay, subDays, isBefore, isAfter, isEqual, parseISO, format, differenceInCalendarDays } from 'date-fns';
 import { fromZonedTime, toZonedTime } from 'date-fns-tz';
 import { ValidadeModel } from '../models/Validade.js';
 import { IValidade, StatusValidade } from '../types/validade.types.js';
 import { formatarValidadeComStatus, obterHojeBrasilia } from '../utils/validade.utils.js';
 import { isValidObjectId } from 'mongoose';
+import { AppError } from '../erros/app-error.js';
+import { buscarAlertasPendentes } from '../validade-lifecycle/orquestrador/camada3-alertas.js';
 
 const TIMEZONE = 'America/Sao_Paulo';
 /**
@@ -52,7 +54,11 @@ const TIMEZONE = 'America/Sao_Paulo';
  */
 const STATUS_VALIDOS: StatusValidade[] = ['espera', 'alerta', 'vencido', 'encerrado'];
 
-export async function listarValidadesComStatus(req: Request, res: Response): Promise<void> {
+export async function listarValidadesComStatus(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
   try {
     const { status, apenas_alerta } = req.query;
 
@@ -67,11 +73,15 @@ export async function listarValidadesComStatus(req: Request, res: Response): Pro
       } else if (STATUS_VALIDOS.includes(statusStr as StatusValidade)) {
         statusFiltro = statusStr as StatusValidade;
       } else {
-        res.status(400).json({
-          sucesso: false,
-          mensagem: `Status inválido. Valores aceitos: ATIVA, VENCIDA, ${STATUS_VALIDOS.join(', ')}.`,
-        });
-        return;
+        // ANTES: res.status(400).json(...)
+        // AGORA: AppError com codigo, via next()
+        return next(
+          new AppError(
+            `Status inválido. Valores aceitos: ATIVA, VENCIDA, ${STATUS_VALIDOS.join(', ')}.`,
+            400,
+            'STATUS_INVALIDO'
+          )
+        );
       }
     }
 
@@ -95,6 +105,7 @@ export async function listarValidadesComStatus(req: Request, res: Response): Pro
     const hoje = obterHojeBrasilia();
 
     // RF-21 + RF-19: Calcula o status na hora para cada registro
+    // Camada 1 aqui dentro: formatarValidadeComStatus -> calcularStatusValidade
     const formatados = registros.map((registro) => {
       const validadeDoc = registro as unknown as IValidade;
       const formatada = formatarValidadeComStatus(validadeDoc);
@@ -122,91 +133,37 @@ export async function listarValidadesComStatus(req: Request, res: Response): Pro
       dados: resultado,
     });
   } catch (erro) {
+    // ANTES: res.status(500).json({ sucesso: false... })
+    // AGORA: repassa para o middleware de erro, que já trata AppError
     console.error('Erro ao listar validades com status:', erro);
-    res.status(500).json({
-      sucesso: false,
-      mensagem: 'Erro interno ao listar validades.',
-    });
+    next(erro);
   }
 };
 
-/**
- * Lista alertas de validade pendentes de envio.
- *
- * Esta rota é usada pelo sistema de notificações para identificar
- * quais registros de validade devem receber alerta no dia atual.
- *
- * Critérios de inclusão:
- * 1. O campo `validade` deve ser exatamente "alerta".
- * 2. A data de validade (`data.data_iso`) deve ser igual ou posterior a hoje.
- * 3. O alerta ainda não pode ter sido enviado hoje, ou seja:
- *    - `alerta.ultimo_envio_em` não existe, ou
- *    - `alerta.ultimo_envio_em` é null, ou
- *    - `alerta.ultimo_envio_em` é anterior ao início do dia atual (Brasília).
- */
 
-export async function listarAlertasPendentes(req: Request, res: Response): Promise<void> {
+// src/controllers/validade.alertas.controller.ts
+// Controller fino: só chama Camada 03, não decide, não filtra no banco.
+
+export async function listarAlertasPendentes(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
   try {
-    const hoje = obterHojeBrasilia();
-    const hojeStr = format(hoje, 'yyyy-MM-dd');
-    const inicioDoDia = fromZonedTime(startOfDay(hoje), TIMEZONE);
-
-    const registros = await ValidadeModel.find({
-      validade: 'alerta',
-      'data.data_iso': { $gte: hojeStr },
-      $or: [
-        { 'alerta.ultimo_envio_em': { $exists: false } },
-        { 'alerta.ultimo_envio_em': null },
-        { 'alerta.ultimo_envio_em': { $lt: inicioDoDia } },
-      ],
-    })
-      .sort({ 'data.data_iso': 1 })
-      .lean<IValidade[]>();
+    const { pendentes, data_referencia, quantidade } = await buscarAlertasPendentes();
 
     res.status(200).json({
       sucesso: true,
-      dados: registros,
-      data_referencia: hojeStr,
-      quantidade: registros.length,
+      dados: pendentes,
+      data_referencia,
+      quantidade,
     });
   } catch (erro) {
     console.error('Erro ao listar alertas pendentes:', erro);
-    res.status(500).json({
-      sucesso: false,
-      mensagem: 'Erro interno ao listar alertas pendentes.',
-    });
+    next(erro);
   }
-}
+};
 
-/**
- * PATCH /validades/:id/confirmar-envio
- *
- * Marca o alerta de uma validade como enviado no dia atual.
- * Este controller deve ser chamado pelo worker de notificações
- * imediatamente após o envio do alerta ao responsável.
- *
- * Regras de negócio:
- * - O ID informado deve ser um ObjectId válido do MongoDB.
- * - O registro de validade deve existir.
- * - Apenas registros com status "alerta" podem ter o envio confirmado.
- *   Status como "espera", "vencido" ou "encerrado" são rejeitados.
- * - O campo `alerta.ultimo_envio_em` é atualizado com o timestamp atual em UTC.
- *
- * Comportamento esperado:
- * Após a confirmação, o registro não deve mais aparecer em
- * GET /alertas-pendentes até o início do próximo dia (fuso America/Sao_Paulo),
- * garantindo que cada alerta seja enviado no máximo uma vez por dia.
- *
- * Exemplo de uso:
- * PATCH /validades/6afc8f2b68f902dfbd3f8304/confirmar-envio
- *
- * Retorno de sucesso:
- * {
- *   "sucesso": true,
- *   "mensagem": "Envio de alerta confirmado.",
- *   "dados": { ... }
- * }
- */
 export async function confirmarEnvioAlerta(req: Request, res: Response): Promise<void> {
   try {
     const { id } = req.params;

@@ -7,7 +7,7 @@
 import { startOfDay, parseISO, differenceInCalendarDays, isValid } from 'date-fns';
 import { toZonedTime } from 'date-fns-tz';
 
-const TIMEZONE_BRASILIA = 'America/Sao_Paulo';
+export const TIMEZONE_BRASILIA = 'America/Sao_Paulo';
 
 /**
  * Retorna o "hoje" oficial do sistema.
