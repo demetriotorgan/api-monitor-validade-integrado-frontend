@@ -5,6 +5,7 @@ import connectDB from './config/db.js';
 
 import validadeRoutes from './routers/validade.routes.js'
 import produtoRoutes from './routers/produto.routes.js'
+import workerRoutes from './routers/worker.routes.js'
 import { errorMiddleware } from './middlewares/error.middleware.js';
 
 const startServer = async () => {
@@ -27,7 +28,7 @@ const startServer = async () => {
         })
     });
 
-    app.use('/api', validadeRoutes, produtoRoutes);
+    app.use('/api', validadeRoutes, produtoRoutes,workerRoutes);
     
     // Middleware de erro
     app.use(errorMiddleware);

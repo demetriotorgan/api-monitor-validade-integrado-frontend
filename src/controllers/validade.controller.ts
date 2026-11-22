@@ -1,8 +1,8 @@
 import { NextFunction, Request, Response } from 'express';
 import { ValidadeModel } from '../models/Validade.js';
-import { IValidade, IValidadeCreationPayload, IValidadeUpdatePayload, StatusValidade } from '../types/validade.types.js';
-import { isValidObjectId } from 'mongoose';
-import { calcularStatusValidade, formatarValidadeComStatus, isDataValidadeFutura } from '../utils/validade.utils.js';
+import { IValidade, IValidadeUpdatePayload } from '../types/validade.types.js';
+import mongoose, { isValidObjectId } from 'mongoose';
+import { formatarValidadeComStatus  } from '../utils/validade.utils.js';
 import { AppError, ErroEdicao } from '../erros/app-error.js';
 import { ProdutoModel } from '../models/Produto.js';
 import { podeCriar } from '../validade-lifecycle/orquestrador/camada1-criacao.js';
@@ -10,6 +10,7 @@ import { decisaoParaErro } from '../validade-lifecycle/adaptador/mapa-erro.js';
 import { podeEncerrar } from '../validade-lifecycle/orquestrador/camada2-encerramento.js';
 import { podeCorrigir } from '../validade-lifecycle/orquestrador/camada2-correcao.js';
 import { podeDeletar } from '../validade-lifecycle/orquestrador/camada2-deletar.js';
+import { EntradaCorrecao } from '../types/lifecycle.type.js';
 
 
 interface AlterarValidadeBody extends IValidadeUpdatePayload { }
@@ -125,17 +126,18 @@ export async function salvarValidade(req: Request, res: Response, next: NextFunc
 // Só chama a Camada 2. Não decide regra nenhuma aqui.
 // Só o humano encerra. Cron NUNCA chama essa rota.
 
-export async function encerrarValidade(req: any, res: any, next: any) {
+export async function encerrarValidade(req: Request, res: Response, next: NextFunction) {
   try {
     const { id } = req.params;
+
+    if (!mongoose.isValidObjectId(id)) {
+      return next(new AppError('ID inválido.', 400, 'ID_INVALIDO'));
+    }
 
     // 1. Busca o registro - se não existe, 404
     const registro = await ValidadeModel.findById(id);
     if (!registro) {
-      const erro: any = new Error('Registro de validade não encontrado.');
-      erro.statusCode = 404;
-      erro.codigo = 'NAO_ENCONTRADO';
-      return next(erro);
+      return next(new AppError('Registro de validade não encontrado.', 404, 'NAO_ENCONTRADO'));
     }
 
     // 2. Monta o atual a partir do BANCO, nunca do front
@@ -150,13 +152,11 @@ export async function encerrarValidade(req: any, res: any, next: any) {
     const decisao = podeEncerrar(registro.validade, atual);
 
     if (!decisao.autorizado) {
-      const erro: any = new Error(decisao.motivo);
-      // Terminal já resolvido = conflito, não erro de validação
-      erro.statusCode = decisao.codigo === 'JA_ENCERRADO' || decisao.codigo === 'JA_VENCIDO'
+      const statusCode = ['JA_ENCERRADO', 'JA_VENCIDO', 'TRANSICAO_PROIBIDA'].includes(decisao.codigo)
         ? 409
         : 400;
-      erro.codigo = decisao.codigo;
-      return next(erro);
+
+      return next(new ErroEdicao(decisao.motivo, statusCode, decisao.codigo));
     }
 
     // 4. Aplica a transição decidida pela Camada 2
@@ -175,17 +175,18 @@ export async function encerrarValidade(req: any, res: any, next: any) {
   }
 };
 
-export async function corrigirValidade(req: any, res: any, next: any) {
+export async function corrigirValidade(req: Request, res: Response, next: NextFunction) {
   try {
     const { id } = req.params;
+
+    if (!mongoose.isValidObjectId(id)) {
+      return next(new AppError('ID inválido.', 400, 'ID_INVALIDO'));
+    }
 
     // 1. Busca o registro - se não existe, 404
     const registro = await ValidadeModel.findById(id);
     if (!registro) {
-      const erro: any = new Error('Registro de validade não encontrado.');
-      erro.statusCode = 404;
-      erro.codigo = 'NAO_ENCONTRADO';
-      return next(erro);
+      return next(new AppError('Registro de validade não encontrado.', 404, 'NAO_ENCONTRADO'));
     }
 
     // 2. Monta o atual a partir do BANCO, nunca do front
@@ -196,7 +197,7 @@ export async function corrigirValidade(req: any, res: any, next: any) {
 
     // 3. Monta a correção a partir do FRONT, só os 2 campos editáveis
     // Qualquer outro campo que o front mandar (validade, produto, etc) é ignorado
-    const correcao: any = {};
+    const correcao: EntradaCorrecao = {};
     if (req.body?.data?.data_iso !== undefined) {
       correcao.data_iso = req.body.data.data_iso;
     }
@@ -208,13 +209,12 @@ export async function corrigirValidade(req: any, res: any, next: any) {
     const decisao = podeCorrigir(registro.validade, atual, correcao);
 
     if (!decisao.autorizado) {
-      const erro: any = new Error(decisao.motivo);
-      erro.statusCode =
+      const statusCode =
         decisao.codigo === 'JA_ENCERRADO' || decisao.codigo === 'JA_VENCIDO'
           ? 409
           : 400;
-      erro.codigo = decisao.codigo;
-      return next(erro);
+
+      return next(new ErroEdicao(decisao.motivo, statusCode, decisao.codigo));
     }
 
     // 5. Aplica só o que veio na correção
@@ -225,7 +225,7 @@ export async function corrigirValidade(req: any, res: any, next: any) {
       registro.data.data_iso = correcao.data_iso;
       registro.data.ano = ano;
       registro.data.mes = mes;
-      registro.data.dia = dia;      
+      registro.data.dia = dia;
     }
     if (correcao.dias_antecedencia !== undefined) {
       registro.alerta.dias_antecedencia = correcao.dias_antecedencia;
@@ -242,6 +242,7 @@ export async function corrigirValidade(req: any, res: any, next: any) {
       dados: formatarValidadeComStatus(registroSalvo.toObject() as any),
     });
   } catch (err) {
+    console.error('[corrigirValidade]', err);
     return next(err);
   }
 };

@@ -36,7 +36,7 @@ export class ErroCadastroProduto extends AppError {
  * Ex: tentar editar produto com código duplicado, tentar editar registro VENCIDO / ENCERRADO
  */
 export class ErroEdicao extends AppError {
-  constructor(mensagem: string, statusCode: number = 400) {
-    super(mensagem, statusCode, 'ERRO_EDICAO');
+  constructor(mensagem: string, statusCode: number = 400, codigo: string = 'ERRO_EDICAO') {
+    super(mensagem, statusCode, codigo);
   }
 }

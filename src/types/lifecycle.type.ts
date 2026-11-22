@@ -46,6 +46,7 @@ export type DecisaoLifecycle =
         | 'STATUS_TERMINAL'
         | 'CAMPO_NAO_EDITAVEL'
         | 'ERRO_DE_DIAS'
+        | 'ERRO_EDICAO'
     };
 
 /**

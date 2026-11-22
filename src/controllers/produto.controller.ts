@@ -195,8 +195,8 @@ export async function listarProdutosPaginado(
 ): Promise<void> {
   try {
     // 1. Paginação - padrão do RF: 20 por página
-    const page = Math.max(1, Number(req.query.page) || 1);
-    const limitRaw = Number(req.query.limit) || 20;
+    const page = Math.max(1, Math.floor(Number(req.query.page)) || 1);
+    const limitRaw = Math.floor(Number(req.query.limit)) || 20;
     // Trava para não deixar o front pedir 10.000 de uma vez e travar o banco
     const limit = Math.min(Math.max(1, limitRaw), 100);
     const skip = (page - 1) * limit;
